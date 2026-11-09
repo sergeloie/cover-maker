@@ -1,0 +1,9 @@
+.venv/
+.venv-linux/
+.tmp-test/
+__pycache__/
+*.pyc
+models/*.onnx
+models/*.part
+.pytest_cache/
+screenshots/
