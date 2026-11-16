@@ -1,4 +1,6 @@
-import { CoverEditor, DOC_PRESETS } from "./editor.js";
+import { CoverEditor, DOC_PRESETS, IMAGE_FILTERS, BLEND_MODES } from "./editor.js";
+import { TEMPLATES, TEXT_STYLES, getTemplate } from "./templates.js";
+import { canvasToPdf } from "./pdf.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -28,6 +30,7 @@ const els = {
   removeBg: $("remove-bg"),
   cutoutCompose: $("cutout-compose"),
   cutoutHint: $("cutout-hint"),
+  cutoutBlurBg: $("cutout-blur-bg"),
   layerList: $("layer-list"),
   layerCount: $("layer-count"),
   layerUp: $("layer-up"),
@@ -90,7 +93,68 @@ const els = {
   exportCancel: $("export-cancel"),
   exportDownload: $("export-download"),
   toasts: $("toasts"),
+  projectSave: $("project-save"),
+  projectOpen: $("project-open"),
+  projectInput: $("project-input"),
+  addShape: $("add-shape"),
+  templateGallery: $("template-gallery"),
+  gridMode: $("grid-mode"),
+  snapToggle: $("snap-toggle"),
+  alignLeft: $("align-left"),
+  alignCenter: $("align-center"),
+  alignRight: $("align-right"),
+  alignTop: $("align-top"),
+  alignMiddle: $("align-middle"),
+  alignBottom: $("align-bottom"),
+  inspectorShape: $("inspector-shape"),
+  shapeKind: $("shape-kind"),
+  shapeFill: $("shape-fill"),
+  shapeFillHex: $("shape-fill-hex"),
+  shapeStroke: $("shape-stroke"),
+  shapeStrokeHex: $("shape-stroke-hex"),
+  shapeStrokeWidth: $("shape-stroke-width"),
+  shapeStrokeWidthValue: $("shape-stroke-width-value"),
+  shapeRadius: $("shape-radius"),
+  shapeRadiusValue: $("shape-radius-value"),
+  shapeLabel: $("shape-label"),
+  shapeLabelSize: $("shape-label-size"),
+  shapeLabelColor: $("shape-label-color"),
+  shapeLabelColorHex: $("shape-label-color-hex"),
+  shapeOpacity: $("shape-opacity"),
+  shapeOpacityValue: $("shape-opacity-value"),
+  shapeGradientEnable: $("shape-gradient-enable"),
+  shapeGradientFrom: $("shape-gradient-from"),
+  shapeGradientTo: $("shape-gradient-to"),
+  shapeGradientAngle: $("shape-gradient-angle"),
+  shapeGradientAngleValue: $("shape-gradient-angle-value"),
+  imageCover: $("image-cover"),
+  imageSlot: $("image-slot"),
+  imageFocusX: $("image-focus-x"),
+  imageFocusXValue: $("image-focus-x-value"),
+  imageFocusY: $("image-focus-y"),
+  imageFocusYValue: $("image-focus-y-value"),
+  imageBlend: $("image-blend"),
+  imagePalette: $("image-palette"),
+  textStyle: $("text-style"),
+  textPlateRadius: $("text-plate-radius"),
+  textPlateRadiusValue: $("text-plate-radius-value"),
+  textPlateStroke: $("text-plate-stroke"),
+  textPlateStrokeWidth: $("text-plate-stroke-width"),
+  textShadowX: $("text-shadow-x"),
+  textShadowXValue: $("text-shadow-x-value"),
+  exportVignette: $("export-vignette"),
+  exportVignetteValue: $("export-vignette-value"),
+  exportGrain: $("export-grain"),
+  exportGrainValue: $("export-grain-value"),
+  exportBleed: $("export-bleed"),
 };
+
+const filterControls = Object.entries(IMAGE_FILTERS).map(([key, spec]) => ({
+  key,
+  spec,
+  input: $(`f-${key}`),
+  output: $(`f-${key}-value`),
+}));
 
 const state = {
   model: ["u2net", "modnet"].includes(localStorage.getItem("cover-maker-model"))
@@ -100,10 +164,28 @@ const state = {
   device: "",
   busy: false,
   modelPoll: null,
+  templateId: null,
+  accentIndex: 0,
 };
 
 let historyGroup = { key: null, at: 0 };
+let autosaveTimer = null;
+const AUTOSAVE_KEY = "cover-maker-project";
 let editor;
+
+function scheduleAutosave() {
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => {
+    try {
+      if (!editor.layers.length) return;
+      const data = JSON.stringify(editor.toJSON());
+      if (data.length > 2500000) return;
+      localStorage.setItem(AUTOSAVE_KEY, data);
+    } catch {
+      // Квота браузера или приватный режим — автосохранение пропускаем.
+    }
+  }, 1200);
+}
 
 function normalizeHex(value) {
   if (typeof value !== "string") return null;
@@ -172,6 +254,94 @@ function clampNumber(value, min, max, fallback = min) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(max, Math.max(min, number));
+}
+
+function drawTemplateThumb(template, canvas) {
+  const width = 112;
+  const height = 158;
+  canvas.width = width * 2;
+  canvas.height = height * 2;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(2, 2);
+  ctx.fillStyle = template.background || "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  if (template.photoSlot) {
+    const slot = template.photoSlot;
+    ctx.fillStyle = "rgba(120,120,130,.22)";
+    ctx.fillRect(slot.x * width, slot.y * height, slot.width * width, slot.height * height);
+  }
+  for (const spec of template.layers) {
+    if (spec.overlay) continue;
+    const x = spec.x * width;
+    const y = spec.y * height;
+    const w = spec.width * width;
+    const h = (spec.height || 0.008) * height;
+    if (spec.type === "shape") {
+      ctx.globalAlpha = spec.opacity ?? 1;
+      ctx.fillStyle = spec.fill || "#888888";
+      if (spec.shape === "ellipse") {
+        ctx.beginPath();
+        ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillRect(x, y, w, Math.max(1, h));
+      }
+      ctx.globalAlpha = 1;
+    } else {
+      const style = TEXT_STYLES[spec.style] || TEXT_STYLES.coverline;
+      const overrides = spec.overrides || {};
+      ctx.fillStyle = overrides.color || style.color || "#222222";
+      const barHeight = Math.max(2, Math.min(15, ((overrides.size || style.size) / 2480) * width));
+      ctx.fillRect(x, y, w, barHeight);
+    }
+  }
+}
+
+function renderTemplateGallery() {
+  els.templateGallery.textContent = "";
+  for (const template of TEMPLATES) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = `template-card${state.templateId === template.id ? " active" : ""}`;
+    card.title = template.description;
+    const canvas = document.createElement("canvas");
+    canvas.className = "template-thumb";
+    drawTemplateThumb(template, canvas);
+    const name = document.createElement("span");
+    name.className = "template-name";
+    name.textContent = template.title;
+    card.append(canvas, name);
+    card.addEventListener("click", () => applyTemplateById(template.id));
+    els.templateGallery.appendChild(card);
+  }
+}
+
+function applyTemplateById(id) {
+  const template = getTemplate(id);
+  editor.applyTemplate(template);
+  state.templateId = template.id;
+  state.accentIndex = 0;
+  renderTemplateGallery();
+  toast(`Шаблон «${template.title}» применён — перетащите фото на холст`, "success", 3400);
+}
+
+function populateSelectOptions() {
+  for (const [value, label] of BLEND_MODES) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    els.imageBlend.appendChild(option);
+  }
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "— Выберите стиль —";
+  els.textStyle.appendChild(empty);
+  for (const [id, style] of Object.entries(TEXT_STYLES)) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = style.label;
+    els.textStyle.appendChild(option);
+  }
 }
 
 function renderModelStates() {
@@ -262,6 +432,7 @@ function updateLayerButtons() {
 }
 
 function renderLayers() {
+  scheduleAutosave();
   const layers = editor.layers;
   els.layerCount.textContent = String(layers.length);
   els.canvasEmpty.hidden = layers.length > 0;
@@ -285,7 +456,7 @@ function renderLayers() {
     if (layer.type === "image") {
       thumb.style.backgroundImage = `url("${layer.src}")`;
     } else {
-      thumb.textContent = "T";
+      thumb.textContent = layer.type === "shape" ? "▢" : "T";
     }
     const meta = document.createElement("div");
     meta.className = "layer-meta";
@@ -305,7 +476,17 @@ function renderLayers() {
       event.stopPropagation();
       editor.toggleVisibility(layer.id);
     });
-    item.append(thumb, meta, eye);
+    const lock = document.createElement("button");
+    lock.className = `layer-lock${layer.locked ? " on" : ""}`;
+    lock.title = layer.locked ? "Разблокировать слой" : "Заблокировать слой";
+    lock.innerHTML = layer.locked
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 7-2.6"/></svg>';
+    lock.addEventListener("click", (event) => {
+      event.stopPropagation();
+      editor.toggleLock(layer.id);
+    });
+    item.append(thumb, meta, lock, eye);
     item.addEventListener("click", () => editor.select(layer.id));
     item.addEventListener("dblclick", () => {
       editor.select(layer.id);
@@ -332,8 +513,46 @@ function populateInspector(layer) {
       els.imageRotation.value = String(Math.round(layer.rotation || 0));
     }
     els.imageRotationValue.textContent = `${Math.round(layer.rotation || 0)}°`;
+    const filters = layer.filters || {};
+    for (const control of filterControls) {
+      const value = filters[control.key] ?? control.spec.default;
+      if (document.activeElement !== control.input) control.input.value = String(value);
+      control.output.textContent = `${Math.round(value)}${control.spec.unit}`;
+    }
+    setControl(els.imageBlend, layer.blendMode || "source-over");
+    const crop = layer.crop;
+    const focusX = crop && crop.width < 1 ? crop.x / (1 - crop.width) : 0.5;
+    const focusY = crop && crop.height < 1 ? crop.y / (1 - crop.height) : 0.5;
+    if (document.activeElement !== els.imageFocusX) els.imageFocusX.value = String(Math.round(focusX * 100));
+    if (document.activeElement !== els.imageFocusY) els.imageFocusY.value = String(Math.round(focusY * 100));
+    els.imageFocusXValue.textContent = `${Math.round(focusX * 100)}%`;
+    els.imageFocusYValue.textContent = `${Math.round(focusY * 100)}%`;
     return;
   }
+  if (layer.type === "shape") {
+    setControl(els.shapeKind, layer.shape || "rect");
+    setColorPair(els.shapeFill, els.shapeFillHex, layer.fill || "#ffffff");
+    setColorPair(els.shapeStroke, els.shapeStrokeHex, layer.stroke || "#000000");
+    setControl(els.shapeStrokeWidth, Math.round(layer.strokeWidth || 0));
+    els.shapeStrokeWidthValue.textContent = `${Math.round(layer.strokeWidth || 0)} px`;
+    setControl(els.shapeRadius, Math.round(layer.radius || 0));
+    els.shapeRadiusValue.textContent = `${Math.round(layer.radius || 0)} px`;
+    setControl(els.shapeLabel, layer.label || "");
+    setControl(els.shapeLabelSize, Math.round(layer.fontSize || 48));
+    setColorPair(els.shapeLabelColor, els.shapeLabelColorHex, layer.labelColor || "#ffffff");
+    if (document.activeElement !== els.shapeOpacity) {
+      els.shapeOpacity.value = String(Math.round((layer.opacity ?? 1) * 100));
+    }
+    els.shapeOpacityValue.textContent = `${Math.round((layer.opacity ?? 1) * 100)}%`;
+    setControl(els.shapeGradientEnable, Boolean(layer.gradient));
+    els.shapeGradientFrom.value = normalizeHex(layer.gradient?.from) || "#ffffff";
+    els.shapeGradientTo.value = normalizeHex(layer.gradient?.to) || "#000000";
+    setControl(els.shapeGradientAngle, Math.round(layer.gradient?.angle || 0));
+    els.shapeGradientAngleValue.textContent = `${Math.round(layer.gradient?.angle || 0)}°`;
+    els.inspectorShape.dataset.layerId = layer.id;
+    return;
+  }
+  setControl(els.textStyle, layer.styleId || "");
   setControl(els.textContent, layer.text);
   setControl(els.textFamily, layer.fontFamily);
   setControl(els.textWeight, String(layer.fontWeight));
@@ -361,6 +580,12 @@ function populateInspector(layer) {
     els.textOpacity.value = String(Math.round((layer.opacity ?? 1) * 100));
   }
   els.textOpacityValue.textContent = `${Math.round((layer.opacity ?? 1) * 100)}%`;
+  setControl(els.textPlateRadius, Math.round(layer.plateRadius || 0));
+  els.textPlateRadiusValue.textContent = `${Math.round(layer.plateRadius || 0)} px`;
+  els.textPlateStroke.value = normalizeHex(layer.plateStrokeColor) || "#000000";
+  setControl(els.textPlateStrokeWidth, Math.round(layer.plateStrokeWidth || 0));
+  setControl(els.textShadowX, Math.round(layer.shadowOffsetX || 0));
+  els.textShadowXValue.textContent = `${Math.round(layer.shadowOffsetX || 0)} px`;
   els.inspectorText.dataset.layerId = layer.id;
 }
 
@@ -368,6 +593,7 @@ function onSelectionChange(layer) {
   historyGroup = { key: null, at: 0 };
   els.inspectorEmpty.hidden = Boolean(layer);
   els.inspectorImage.hidden = !(layer && layer.type === "image");
+  els.inspectorShape.hidden = !(layer && layer.type === "shape");
   els.inspectorText.hidden = !(layer && layer.type === "text");
   if (layer) populateInspector(layer);
   updateLayerButtons();
@@ -388,6 +614,7 @@ function onLayerUpdate(layer) {
 }
 
 function onDocChange(doc) {
+  scheduleAutosave();
   if (document.activeElement !== els.docWidth) els.docWidth.value = String(doc.width);
   if (document.activeElement !== els.docHeight) els.docHeight.value = String(doc.height);
   els.docBackground.value = doc.background;
@@ -426,63 +653,9 @@ function initEditor() {
 
 function seedStarter() {
   if (editor.layers.length) return;
-  const width = editor.doc.width;
-  const height = editor.doc.height;
-  editor.addTextLayer({
-    name: "Заголовок",
-    text: "НОВЫЙ\nВЫПУСК",
-    x: width * 0.07,
-    y: height * 0.055,
-    width: width * 0.86,
-    fontSize: Math.round(width * 0.15),
-    lineHeight: 0.9,
-    fontWeight: 900,
-    color: "#f7f2e7",
-    strokeColor: "#121212",
-    strokeWidth: Math.round(width * 0.006),
-    align: "left",
-    shadowEnabled: true,
-    shadowColor: "#000000",
-    shadowBlur: Math.round(width * 0.008),
-  });
-  editor.addTextLayer({
-    name: "Подзаголовок",
-    text: "ИСТОРИИ, КОТОРЫЕ\nВДОХНОВЛЯЮТ",
-    x: width * 0.07,
-    y: height * 0.755,
-    width: width * 0.74,
-    fontSize: Math.round(width * 0.043),
-    fontFamily: "'Arial Black', Arial, sans-serif",
-    fontWeight: 800,
-    lineHeight: 1.05,
-    letterSpacing: 2,
-    color: "#191310",
-    strokeWidth: 0,
-    backgroundEnabled: true,
-    backgroundColor: "#f2c14e",
-    backgroundPadding: Math.round(width * 0.014),
-    shadowEnabled: false,
-    align: "left",
-    uppercase: true,
-  });
-  editor.addTextLayer({
-    name: "Номер выпуска",
-    text: "№ 01 — 2026",
-    x: width * 0.55,
-    y: height * 0.925,
-    width: width * 0.38,
-    fontSize: Math.round(width * 0.028),
-    fontFamily: "Arial, Helvetica, sans-serif",
-    fontWeight: 600,
-    align: "right",
-    color: "#f7f2e7",
-    strokeWidth: 0,
-    uppercase: true,
-    letterSpacing: 3,
-    shadowEnabled: true,
-    shadowColor: "#000000",
-    shadowBlur: 10,
-  });
+  editor.applyTemplate(getTemplate("fashion"));
+  state.templateId = "fashion";
+  renderTemplateGallery();
   editor.select(null);
   editor.history = [];
   editor.future = [];
@@ -532,6 +705,31 @@ function bindNumber(element, property, { min = -Infinity, max = Infinity, key, h
 }
 
 function bindInspector() {
+  els.textStyle.addEventListener("change", () => {
+    const style = TEXT_STYLES[els.textStyle.value];
+    if (!style) return;
+    historyOnce("text-style");
+    editor.updateSelected({
+      styleId: els.textStyle.value,
+      fontFamily: style.fontFamily,
+      fontWeight: style.fontWeight,
+      fontSize: Math.round((style.size / 2480) * editor.doc.width),
+      lineHeight: style.lineHeight,
+      letterSpacing: Math.round((style.tracking / 2480) * editor.doc.width),
+      uppercase: style.uppercase,
+      align: style.align,
+      color: style.color,
+      strokeColor: style.strokeColor,
+      strokeWidth: Math.round((style.strokeWidth / 2480) * editor.doc.width),
+      backgroundEnabled: style.backgroundEnabled,
+      backgroundColor: style.backgroundColor,
+      backgroundPadding: Math.round((style.backgroundPadding / 2480) * editor.doc.width),
+      shadowEnabled: style.shadowEnabled,
+      shadowColor: style.shadowColor,
+      shadowBlur: Math.round((style.shadowBlur / 2480) * editor.doc.width),
+    });
+    toast(`Стиль «${style.label}» применён`, "info", 2200);
+  });
   els.textContent.addEventListener("input", () => {
     historyOnce("text");
     editor.updateSelected({ text: els.textContent.value });
@@ -616,6 +814,206 @@ function bindInspector() {
   els.imageReplace.addEventListener("click", () => els.replaceInput.click());
   els.imageRemoveBg.addEventListener("click", () => runCutout("replace"));
   els.imageCutoutCompose.addEventListener("click", () => runCutout("split"));
+  els.textPlateRadius.addEventListener("input", () => {
+    const value = Number(els.textPlateRadius.value);
+    historyOnce("plate-radius");
+    editor.updateSelected({ plateRadius: value });
+    els.textPlateRadiusValue.textContent = `${Math.round(value)} px`;
+  });
+  els.textPlateStroke.addEventListener("input", () => {
+    historyOnce("plate-stroke");
+    editor.updateSelected({ plateStrokeColor: els.textPlateStroke.value });
+  });
+  els.textPlateStrokeWidth.addEventListener("input", () => {
+    historyOnce("plate-stroke-width");
+    editor.updateSelected({ plateStrokeWidth: Number(els.textPlateStrokeWidth.value) });
+  });
+  els.textShadowX.addEventListener("input", () => {
+    const value = Number(els.textShadowX.value);
+    historyOnce("shadow-x");
+    editor.updateSelected({ shadowOffsetX: value });
+    els.textShadowXValue.textContent = `${Math.round(value)} px`;
+  });
+}
+
+function bindImageEffects() {
+  for (const control of filterControls) {
+    control.input.addEventListener("input", () => {
+      const layer = editor.getSelected();
+      if (!layer || layer.type !== "image") return;
+      const value = Number(control.input.value);
+      historyOnce(`filter-${control.key}`);
+      const filters = { ...(layer.filters || {}), [control.key]: value };
+      editor.updateSelected({ filters });
+      control.output.textContent = `${Math.round(value)}${control.spec.unit}`;
+    });
+  }
+  els.imageBlend.addEventListener("change", () => {
+    historyOnce("blend");
+    editor.updateSelected({ blendMode: els.imageBlend.value });
+  });
+  els.imageCover.addEventListener("click", () => editor.fitSelectedImage({ cover: true }));
+  els.imageSlot.addEventListener("click", () => editor.fitSelectedImage({ useSlot: true }));
+  const applyFocus = () => {
+    const layer = editor.getSelected();
+    if (!layer || layer.type !== "image") return;
+    const x = Number(els.imageFocusX.value) / 100;
+    const y = Number(els.imageFocusY.value) / 100;
+    historyOnce("focus");
+    editor.setCropFocus(x, y);
+    els.imageFocusXValue.textContent = `${Math.round(x * 100)}%`;
+    els.imageFocusYValue.textContent = `${Math.round(y * 100)}%`;
+  };
+  els.imageFocusX.addEventListener("input", applyFocus);
+  els.imageFocusY.addEventListener("input", applyFocus);
+  els.imagePalette.addEventListener("click", applyImagePalette);
+}
+
+async function applyImagePalette() {
+  const layer = editor.getSelected();
+  if (!layer || layer.type !== "image" || !layer._img) return;
+  const size = 40;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(layer._img, 0, 0, size, size);
+  const data = ctx.getImageData(0, 0, size, size).data;
+  const buckets = new Map();
+  for (let index = 0; index < data.length; index += 4) {
+    if (data[index + 3] < 128) continue;
+    const key = `${data[index] >> 5}-${data[index + 1] >> 5}-${data[index + 2] >> 5}`;
+    const current = buckets.get(key) || { count: 0, r: 0, g: 0, b: 0 };
+    current.count += 1;
+    current.r += data[index];
+    current.g += data[index + 1];
+    current.b += data[index + 2];
+    buckets.set(key, current);
+  }
+  const colors = [...buckets.values()]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map((item) => {
+      const hex = (value) => Math.max(0, Math.min(255, Math.round(value / item.count))).toString(16).padStart(2, "0");
+      return `#${hex(item.r)}${hex(item.g)}${hex(item.b)}`;
+    });
+  if (!colors.length) return;
+  editor.pushHistory();
+  editor.setDocumentBackground(colors[0], false);
+  for (const textLayer of editor.layers.filter((item) => item.type === "text" && item.role === "coverline")) {
+    textLayer.color = colors[1] || colors[0];
+  }
+  editor._render();
+  editor._notifyDoc();
+  editor._notifyLayers();
+  toast(`Палитра из фото: ${colors.slice(0, 3).join(" · ")}`, "success", 4000);
+}
+
+function bindShapeInspector() {
+  els.shapeKind.addEventListener("change", () => {
+    historyOnce("shape-kind");
+    editor.updateSelected({ shape: els.shapeKind.value });
+  });
+  bindColorPair(els.shapeFill, els.shapeFillHex, "fill", "shape-fill");
+  bindColorPair(els.shapeStroke, els.shapeStrokeHex, "stroke", "shape-stroke");
+  bindColorPair(els.shapeLabelColor, els.shapeLabelColorHex, "labelColor", "shape-label-color");
+  els.shapeStrokeWidth.addEventListener("input", () => {
+    const value = Number(els.shapeStrokeWidth.value);
+    historyOnce("shape-stroke-width");
+    editor.updateSelected({ strokeWidth: value });
+    els.shapeStrokeWidthValue.textContent = `${Math.round(value)} px`;
+  });
+  els.shapeRadius.addEventListener("input", () => {
+    const value = Number(els.shapeRadius.value);
+    historyOnce("shape-radius");
+    editor.updateSelected({ radius: value });
+    els.shapeRadiusValue.textContent = `${Math.round(value)} px`;
+  });
+  els.shapeLabel.addEventListener("input", () => {
+    historyOnce("shape-label");
+    editor.updateSelected({ label: els.shapeLabel.value });
+  });
+  bindNumber(els.shapeLabelSize, "fontSize", { min: 8, max: 800, key: "shape-label-size" });
+  bindRange(els.shapeOpacity, els.shapeOpacityValue, "opacity", (value) => value / 100, (value) => `${Math.round(value * 100)}%`);
+  const updateGradient = () => {
+    const layer = editor.getSelected();
+    if (!layer || layer.type !== "shape") return;
+    historyOnce("shape-gradient");
+    editor.updateSelected({
+      gradient: els.shapeGradientEnable.checked
+        ? {
+            from: els.shapeGradientFrom.value,
+            to: els.shapeGradientTo.value,
+            angle: Number(els.shapeGradientAngle.value),
+          }
+        : null,
+    });
+  };
+  els.shapeGradientEnable.addEventListener("change", updateGradient);
+  els.shapeGradientFrom.addEventListener("input", updateGradient);
+  els.shapeGradientTo.addEventListener("input", updateGradient);
+  els.shapeGradientAngle.addEventListener("input", () => {
+    els.shapeGradientAngleValue.textContent = `${els.shapeGradientAngle.value}°`;
+    updateGradient();
+  });
+}
+
+function bindTemplateAndLayout() {
+  els.addShape.addEventListener("click", () => editor.addShapeLayer());
+  els.gridMode.addEventListener("change", () => editor.setGridMode(els.gridMode.value));
+  els.snapToggle.addEventListener("click", () => {
+    editor.snapEnabled = !editor.snapEnabled;
+    els.snapToggle.classList.toggle("active", editor.snapEnabled);
+    toast(editor.snapEnabled ? "Привязка включена" : "Привязка выключена", "info", 1800);
+  });
+  const alignButtons = [
+    [els.alignLeft, "left"], [els.alignCenter, "center"], [els.alignRight, "right"],
+    [els.alignTop, "top"], [els.alignMiddle, "middle"], [els.alignBottom, "bottom"],
+  ];
+  for (const [button, mode] of alignButtons) {
+    button.addEventListener("click", () => editor.alignSelected(mode));
+  }
+}
+
+function bindProject() {
+  els.projectSave.addEventListener("click", () => {
+    const data = JSON.stringify(editor.toJSON());
+    const blob = new Blob([data], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `cover-project-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => link.remove(), 2000);
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    toast("Проект сохранён", "success", 2500);
+  });
+  els.projectOpen.addEventListener("click", () => els.projectInput.click());
+  els.projectInput.addEventListener("change", async () => {
+    const file = els.projectInput.files?.[0];
+    els.projectInput.value = "";
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      await editor.loadFromJSON(data);
+      state.templateId = data.templateId || null;
+      renderTemplateGallery();
+      toast("Проект открыт", "success", 2500);
+    } catch (error) {
+      toast(`Не удалось открыть проект: ${error.message}`, "error", 5000);
+    }
+  });
+}
+
+function bindExportFinish() {
+  els.exportVignette.addEventListener("input", () => {
+    els.exportVignetteValue.textContent = `${els.exportVignette.value}%`;
+  });
+  els.exportGrain.addEventListener("input", () => {
+    els.exportGrainValue.textContent = `${els.exportGrain.value}%`;
+  });
+  els.exportBleed.addEventListener("change", updateExportSummary);
 }
 
 function bindAppControls() {
@@ -790,7 +1188,9 @@ async function runCutout(mode) {
     const seconds = result.meta.elapsedMs ? `${(result.meta.elapsedMs / 1000).toFixed(1)} с` : "";
     const device = shortDevice(result.meta.device);
     if (mode === "split") {
-      await editor.splitWithCutout(layer.id, dataUrl, `Объект — ${baseName}`);
+      await editor.splitWithCutout(layer.id, dataUrl, `Объект — ${baseName}`, {
+        blurBackground: els.cutoutBlurBg.checked,
+      });
       toast(
         `Объект вырезан: «${baseName}» остался снизу, копия объекта поднята выше. ${modelLabel}${device ? ` · ${device}` : ""}${seconds ? ` · ${seconds}` : ""}`,
         "success",
@@ -819,9 +1219,9 @@ async function runCutout(mode) {
 
 function updateExportOptions() {
   const format = els.exportFormat.value;
-  els.exportQualityRow.hidden = format !== "jpeg";
-  els.exportTransparent.disabled = format === "jpeg";
-  if (format === "jpeg") els.exportTransparent.checked = false;
+  els.exportQualityRow.hidden = format === "png";
+  els.exportTransparent.disabled = format !== "png";
+  if (format !== "png") els.exportTransparent.checked = false;
   updateExportSummary();
 }
 
@@ -831,7 +1231,8 @@ function updateExportSummary() {
   const height = Math.round(editor.doc.height * scale);
   const format = els.exportFormat.value.toUpperCase();
   const transparent = els.exportTransparent.checked && els.exportFormat.value === "png";
-  els.exportSummary.textContent = `${width} × ${height} px · ${format}${transparent ? " · прозрачный фон" : ""}`;
+  const bleed = format === "PDF" && els.exportBleed.checked ? " · поля 3 мм + метки" : "";
+  els.exportSummary.textContent = `${width} × ${height} px · ${format}${transparent ? " · прозрачный фон" : ""}${bleed}`;
 }
 
 function openExport() {
@@ -851,19 +1252,34 @@ async function downloadExport() {
   const format = els.exportFormat.value;
   const scale = Number(els.exportScale.value) || 1;
   const transparent = els.exportTransparent.checked && format === "png";
+  const quality = Number(els.exportQuality.value) / 100;
+  const finish = {
+    grain: Number(els.exportGrain.value),
+    vignette: Number(els.exportVignette.value),
+  };
   els.exportDownload.disabled = true;
   els.exportDownload.textContent = "Готовим файл…";
   try {
-    const blob = await editor.exportBlob({
-      format,
-      scale,
-      quality: Number(els.exportQuality.value) / 100,
-      transparent,
-    });
+    let blob;
+    if (format === "pdf") {
+      const jpegBlob = await editor.exportBlob({ format: "jpeg", scale, quality, transparent: false, finish });
+      const sourceUrl = URL.createObjectURL(jpegBlob);
+      const image = new Image();
+      image.src = sourceUrl;
+      await image.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      canvas.getContext("2d").drawImage(image, 0, 0);
+      URL.revokeObjectURL(sourceUrl);
+      blob = await canvasToPdf({ canvas, quality, bleed: els.exportBleed.checked });
+    } else {
+      blob = await editor.exportBlob({ format, scale, quality, transparent, finish });
+    }
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    const ext = format === "jpeg" ? "jpg" : "png";
+    const ext = format === "jpeg" ? "jpg" : format === "pdf" ? "pdf" : "png";
     link.download = `cover-${Math.round(editor.doc.width * scale)}x${Math.round(editor.doc.height * scale)}.${ext}`;
     document.body.appendChild(link);
     link.click();
@@ -922,6 +1338,16 @@ function bindKeyboard() {
         openExport();
         return;
       }
+      if (key === "s") {
+        event.preventDefault();
+        els.projectSave.click();
+        return;
+      }
+      if (key === "o") {
+        event.preventDefault();
+        els.projectOpen.click();
+        return;
+      }
     }
     if (isEditableTarget(event.target)) return;
     if (event.key === "Delete" || event.key === "Backspace") {
@@ -945,15 +1371,54 @@ function bindKeyboard() {
   });
 }
 
+async function loadEditorFonts() {
+  if (!document.fonts || !document.fonts.load) return;
+  const specs = [
+    '700 120px "Playfair Display"',
+    '600 120px "Cormorant Garamond"',
+    '400 120px "Bebas Neue"',
+    '800 120px "Montserrat"',
+    '400 120px "Abril Fatface"',
+  ];
+  try {
+    await Promise.all(specs.map((spec) => document.fonts.load(spec)));
+    await document.fonts.ready;
+  } catch (error) {
+    console.warn("Не удалось загрузить часть шрифтов", error);
+  }
+}
+
 async function init() {
   initEditor();
+  populateSelectOptions();
   bindInspector();
+  bindImageEffects();
+  bindShapeInspector();
+  bindTemplateAndLayout();
+  bindProject();
+  bindExportFinish();
   bindAppControls();
   bindKeyboard();
   renderLayers();
   onSelectionChange(null);
   onDocChange(editor.doc);
-  seedStarter();
+  await loadEditorFonts();
+  const savedProject = localStorage.getItem(AUTOSAVE_KEY);
+  if (savedProject) {
+    try {
+      await editor.loadFromJSON(JSON.parse(savedProject));
+      state.templateId = editor.templateId || null;
+      renderTemplateGallery();
+      editor.history = [];
+      editor.future = [];
+      onHistoryChange({ canUndo: false, canRedo: false });
+      toast("Восстановлен сохранённый проект", "info", 3000);
+    } catch (error) {
+      console.warn("Не удалось восстановить проект", error);
+      localStorage.removeItem(AUTOSAVE_KEY);
+    }
+  }
+  if (!editor.layers.length) seedStarter();
   renderLayers();
   onSelectionChange(null);
   await refreshModels();

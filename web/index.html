@@ -44,6 +44,13 @@
     </div>
 
     <div class="top-actions">
+      <button class="icon-button ghost" id="project-save" title="Сохранить проект (Ctrl+S)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v6h8V4M8 20v-6h8v6"/></svg>
+      </button>
+      <button class="icon-button ghost" id="project-open" title="Открыть проект (Ctrl+O)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h6l2 2h10v10H3z"/><path d="M3 7V5h6l2 2"/></svg>
+      </button>
+      <input id="project-input" type="file" accept="application/json,.json" hidden>
       <button class="icon-button ghost" id="undo" title="Отменить (Ctrl+Z)" disabled>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7 4 12l5 5"/><path d="M4 12h9a6 6 0 0 1 6 6v1"/></svg>
       </button>
@@ -72,9 +79,21 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6V4h16v2"/><path d="M12 4v16"/><path d="M8 20h8"/></svg>
             <span>Текст</span>
           </button>
+          <button class="insert-button" id="add-shape">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="12" rx="2"/><circle cx="9" cy="10" r="2"/></svg>
+            <span>Фигура</span>
+          </button>
         </div>
         <input id="image-input" type="file" accept="image/*" multiple hidden>
         <input id="replace-input" type="file" accept="image/*" hidden>
+      </section>
+
+      <section class="panel templates-panel">
+        <div class="panel-heading">
+          <h2>Шаблоны обложек</h2>
+        </div>
+        <div class="template-gallery" id="template-gallery"></div>
+        <p class="hint">Шаблон задаёт типографику, палитру и композицию. Фото можно перетащить в пунктирную зону.</p>
       </section>
 
       <section class="panel cutout-panel">
@@ -104,9 +123,13 @@
         </div>
         <label class="range-field">
           <span>Смягчение края <output id="feather-value">0 px</output></span>
-          <input id="feather" type="range" min="0" max="10" step="1" value="0">
+          <input id="feather" type="range" min="0" max="20" step="1" value="0">
         </label>
         <div class="cutout-actions">
+          <label class="check-row">
+            <input id="cutout-blur-bg" type="checkbox" checked>
+            <span>Размывать фон под вырезанным объектом</span>
+          </label>
           <button class="button secondary wide" id="remove-bg" disabled>
             Удалить фон слоя
           </button>
@@ -125,6 +148,14 @@
         </div>
         <div class="layer-list" id="layer-list">
           <div class="empty-layers">Пока пусто. Добавьте фото или текст.</div>
+        </div>
+        <div class="align-toolbar" id="align-toolbar">
+          <button class="icon-button" id="align-left" title="По левому краю"><svg viewBox="0 0 24 24"><path d="M4 4v16M8 7h10M8 12h7M8 17h11"/></svg></button>
+          <button class="icon-button" id="align-center" title="По центру"><svg viewBox="0 0 24 24"><path d="M12 4v16M6 7h12M8 12h8M5 17h14"/></svg></button>
+          <button class="icon-button" id="align-right" title="По правому краю"><svg viewBox="0 0 24 24"><path d="M20 4v16M6 7h10M9 12h7M5 17h11"/></svg></button>
+          <button class="icon-button" id="align-top" title="По верхнему краю"><svg viewBox="0 0 24 24"><path d="M4 4h16M7 8v10M12 8v7M17 8v11"/></svg></button>
+          <button class="icon-button" id="align-middle" title="По середине"><svg viewBox="0 0 24 24"><path d="M4 12h16M7 6v12M12 8v8M17 5v14"/></svg></button>
+          <button class="icon-button" id="align-bottom" title="По нижнему краю"><svg viewBox="0 0 24 24"><path d="M4 20h16M7 6v10M12 9v7M17 4v12"/></svg></button>
         </div>
         <div class="layer-toolbar">
           <button class="icon-button" id="layer-up" title="Выше" disabled>
@@ -149,6 +180,17 @@
           <span class="dot"></span>
           <span id="stage-title">Обложка A4</span>
           <span class="stage-meta" id="stage-meta">2480 × 3508 px</span>
+        </div>
+        <div class="stage-view-tools">
+          <select id="grid-mode" title="Сетка и направляющие">
+            <option value="none">Без сетки</option>
+            <option value="thirds">Трети</option>
+            <option value="six">6 × 4</option>
+            <option value="margins">Поля 5%</option>
+          </select>
+          <button class="icon-button ghost active" id="snap-toggle" title="Привязка к центру и краям">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4v6a6 6 0 0 0 6 6h6"/><path d="m15 13 3 3-3 3"/><circle cx="6" cy="4" r="1"/></svg>
+          </button>
         </div>
         <span class="stage-fit" id="stage-zoom">вписано</span>
       </div>
@@ -208,6 +250,72 @@
           <button class="button secondary" id="image-remove-bg">Удалить фон</button>
         </div>
         <button class="button cutout wide" id="image-cutout-compose">Вырезать объект</button>
+
+        <div class="inspector-section">
+          <h3>Композиция</h3>
+          <div class="button-row">
+            <button class="button secondary" id="image-cover">В рамку (cover)</button>
+            <button class="button secondary" id="image-slot">В фото-слот</button>
+          </div>
+          <label class="range-field">
+            <span>Фокус по X <output id="image-focus-x-value">50%</output></span>
+            <input id="image-focus-x" type="range" min="0" max="100" step="1" value="50">
+          </label>
+          <label class="range-field">
+            <span>Фокус по Y <output id="image-focus-y-value">50%</output></span>
+            <input id="image-focus-y" type="range" min="0" max="100" step="1" value="50">
+          </label>
+        </div>
+
+        <div class="inspector-section">
+          <h3>Цвет и свет</h3>
+          <label class="field">
+            <span>Наложение</span>
+            <select id="image-blend"></select>
+          </label>
+          <div class="filter-grid">
+            <label class="range-field"><span>Яркость <output id="f-brightness-value">100%</output></span><input id="f-brightness" type="range" min="0" max="200" value="100"></label>
+            <label class="range-field"><span>Контраст <output id="f-contrast-value">100%</output></span><input id="f-contrast" type="range" min="0" max="200" value="100"></label>
+            <label class="range-field"><span>Насыщенность <output id="f-saturate-value">100%</output></span><input id="f-saturate" type="range" min="0" max="200" value="100"></label>
+            <label class="range-field"><span>Ч/б <output id="f-grayscale-value">0%</output></span><input id="f-grayscale" type="range" min="0" max="100" value="0"></label>
+            <label class="range-field"><span>Сепия <output id="f-sepia-value">0%</output></span><input id="f-sepia" type="range" min="0" max="100" value="0"></label>
+            <label class="range-field"><span>Размытие <output id="f-blur-value">0px</output></span><input id="f-blur" type="range" min="0" max="40" value="0"></label>
+          </div>
+          <button class="button secondary wide" id="image-palette">Взять цвета из фото</button>
+        </div>
+      </div>
+
+      <div class="inspector" id="inspector-shape" hidden>
+        <div class="panel-heading">
+          <h2>Фигура</h2>
+          <span class="type-badge">слой</span>
+        </div>
+        <label class="field">
+          <span>Тип</span>
+          <select id="shape-kind">
+            <option value="rect">Прямоугольник</option>
+            <option value="ellipse">Эллипс</option>
+            <option value="line">Линия</option>
+          </select>
+        </label>
+        <div class="field-grid two">
+          <label class="field color-field"><span>Заливка</span><span class="color-input-wrap"><input id="shape-fill" type="color"><input id="shape-fill-hex" type="text" maxlength="7" spellcheck="false"></span></label>
+          <label class="field color-field"><span>Обводка</span><span class="color-input-wrap"><input id="shape-stroke" type="color"><input id="shape-stroke-hex" type="text" maxlength="7" spellcheck="false"></span></label>
+        </div>
+        <label class="range-field"><span>Толщина обводки <output id="shape-stroke-width-value">0 px</output></span><input id="shape-stroke-width" type="range" min="0" max="40" value="0"></label>
+        <label class="range-field"><span>Скругление <output id="shape-radius-value">0 px</output></span><input id="shape-radius" type="range" min="0" max="300" value="0"></label>
+        <label class="field"><span>Текст на фигуре (наклейка)</span><textarea id="shape-label" rows="2" spellcheck="false"></textarea></label>
+        <div class="field-grid two">
+          <label class="field"><span>Размер текста</span><input id="shape-label-size" type="number" min="8" max="800" step="1"></label>
+          <label class="field color-field"><span>Цвет текста</span><span class="color-input-wrap"><input id="shape-label-color" type="color"><input id="shape-label-color-hex" type="text" maxlength="7" spellcheck="false"></span></label>
+        </div>
+        <label class="range-field"><span>Прозрачность <output id="shape-opacity-value">100%</output></span><input id="shape-opacity" type="range" min="0" max="100" value="100"></label>
+        <div class="check-row"><input id="shape-gradient-enable" type="checkbox"><span>Градиентная заливка</span></div>
+        <div class="field-grid two" id="shape-gradient-colors">
+          <label class="field color-field"><span>От</span><span class="color-input-wrap"><input id="shape-gradient-from" type="color"></span></label>
+          <label class="field color-field"><span>До</span><span class="color-input-wrap"><input id="shape-gradient-to" type="color"></span></label>
+        </div>
+        <label class="range-field"><span>Угол градиента <output id="shape-gradient-angle-value">0°</output></span><input id="shape-gradient-angle" type="range" min="0" max="360" value="0"></label>
       </div>
 
       <div class="inspector" id="inspector-text" hidden>
@@ -215,6 +323,10 @@
           <h2>Текст</h2>
           <span class="type-badge">слой</span>
         </div>
+        <label class="field">
+          <span>Стиль журнала</span>
+          <select id="text-style"></select>
+        </label>
         <label class="field">
           <span>Содержимое</span>
           <textarea id="text-content" rows="3" spellcheck="false"></textarea>
@@ -300,6 +412,18 @@
             <input id="text-bg-enable" type="checkbox">
             <span>Показывать плашку за текстом</span>
           </label>
+          <label class="range-field">
+            <span>Скругление плашки <output id="text-plate-radius-value">0 px</output></span>
+            <input id="text-plate-radius" type="range" min="0" max="300" value="0">
+          </label>
+          <div class="color-row">
+            <label class="field color-field"><span>Обводка плашки</span><span class="color-input-wrap"><input id="text-plate-stroke" type="color"></span></label>
+            <label class="field small-field"><span>Толщина</span><input id="text-plate-stroke-width" type="number" min="0" max="40" step="1"></label>
+          </div>
+          <label class="range-field">
+            <span>Сдвиг тени по X <output id="text-shadow-x-value">0 px</output></span>
+            <input id="text-shadow-x" type="range" min="-100" max="100" value="0">
+          </label>
           <div class="color-row">
             <label class="field color-field">
               <span>Тень</span>
@@ -347,6 +471,7 @@
           <select id="export-format">
             <option value="png">PNG</option>
             <option value="jpeg">JPEG</option>
+            <option value="pdf">PDF (печать)</option>
           </select>
         </label>
         <label class="field">
@@ -366,6 +491,12 @@
         <input id="export-transparent" type="checkbox">
         <span>Прозрачный фон (только PNG)</span>
       </label>
+      <div class="inspector-section export-finish">
+        <h3>Глянцевая отделка</h3>
+        <label class="range-field"><span>Виньетка <output id="export-vignette-value">0%</output></span><input id="export-vignette" type="range" min="0" max="100" value="0"></label>
+        <label class="range-field"><span>Зерно <output id="export-grain-value">0%</output></span><input id="export-grain" type="range" min="0" max="100" value="0"></label>
+        <label class="check-row"><input id="export-bleed" type="checkbox"><span>PDF: поля 3 мм и метки обрезки</span></label>
+      </div>
       <div class="modal-actions">
         <button class="button secondary" id="export-cancel">Отмена</button>
         <button class="button accent" id="export-download">Скачать файл</button>
